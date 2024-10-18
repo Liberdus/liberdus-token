@@ -4,8 +4,10 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Liberdus is ERC20, Pausable {
+contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     using ECDSA for bytes32;
 
     enum OperationType { 
@@ -45,6 +47,7 @@ contract Liberdus is ERC20, Pausable {
 
     address[3] public signers;
     uint256 public constant REQUIRED_SIGNATURES = 3;
+    uint256 public constant REQUIRED_SIGNATURES_FOR_UPDATE = 2;
 
     event OperationRequested(bytes32 indexed operationId, OperationType indexed opType);
     event SignatureSubmitted(bytes32 indexed operationId, address indexed signer);
@@ -65,17 +68,8 @@ contract Liberdus is ERC20, Pausable {
         _;
     }
 
-    constructor(address[3] memory _signers) ERC20("Liberdus Token", "LIB") {
+    constructor(address[3] memory _signers) ERC20("Liberdus Token", "LIB") Ownable(msg.sender) {
         signers = _signers;
-    }
-
-    function isSigner(address account) public view returns (bool) {
-        for (uint i = 0; i < signers.length; i++) {
-            if (signers[i] == account) {
-                return true;
-            }
-        }
-        return false;
     }
 
     function requestOperation(
@@ -83,7 +77,17 @@ contract Liberdus is ERC20, Pausable {
         address target,
         uint256 value,
         bytes memory data
-    ) public onlySigner returns (bytes32) {
+    ) public returns (bytes32) {
+        require(isSigner(msg.sender) || owner() == msg.sender, "Not authorized to request operation");
+        
+        if (opType == OperationType.UpdateSigner) {
+            address oldSigner = target;
+            address newSigner = address(uint160(value));
+            require(isSigner(oldSigner), "Old signer not found");
+            require(!isSigner(newSigner), "New signer already exists");
+            require(oldSigner != msg.sender, "Cannot request to replace self");
+        }
+
         bytes32 operationId = keccak256(abi.encodePacked(operationCount++, opType, target, value, data));
         Operation storage op = operations[operationId];
         op.opType = opType;
@@ -98,8 +102,10 @@ contract Liberdus is ERC20, Pausable {
     }
 
     function submitSignature(bytes32 operationId, bytes memory signature) public {
+        require(isSigner(msg.sender), "Only signers can submit signatures");
         Operation storage op = operations[operationId];
         require(!op.executed, "Operation already executed");
+        require(!op.signatures[msg.sender], "Signature already submitted");
 
         bytes32 messageHash = getOperationHash(operationId);
         emit DebugLog("Raw message hash", messageHash);
@@ -113,30 +119,37 @@ contract Liberdus is ERC20, Pausable {
         emit DebugAddress("Recovered signer", signer);
         
         require(isSigner(signer), "Invalid signature");
-        require(!op.signatures[signer], "Signature already submitted for this signer");
+
+        if (op.opType == OperationType.UpdateSigner) {
+            require(signer != op.target, "Signer being replaced cannot approve");
+            require(op.numSignatures < REQUIRED_SIGNATURES_FOR_UPDATE, "Enough signatures already");
+        } else {
+            require(op.numSignatures < REQUIRED_SIGNATURES, "Enough signatures already");
+        }
 
         op.signatures[signer] = true;
         op.numSignatures++;
 
         emit SignatureSubmitted(operationId, signer);
 
-        if (op.numSignatures == REQUIRED_SIGNATURES) {
+        if ((op.opType == OperationType.UpdateSigner && op.numSignatures == REQUIRED_SIGNATURES_FOR_UPDATE) ||
+            (op.opType != OperationType.UpdateSigner && op.numSignatures == REQUIRED_SIGNATURES)) {
             executeOperation(operationId);
         }
     }
 
-    function executeOperation(bytes32 operationId) internal {
+    function executeOperation(bytes32 operationId) internal nonReentrant {
         Operation storage op = operations[operationId];
-        require(op.numSignatures == REQUIRED_SIGNATURES, "Not enough signatures");
         require(!op.executed, "Operation already executed");
-
+        
+        // Mark as executed before making any external calls
         op.executed = true;
 
-        if (op.opType == OperationType.Mint) {
-            require(isPreLaunch, "Minting only allowed in pre-launch");
+        if (op.opType == OperationType.UpdateSigner) {
+            _executeUpdateSigner(op.target, address(uint160(op.value)));
+        } else if (op.opType == OperationType.Mint) {
             _executeMint();
         } else if (op.opType == OperationType.Burn) {
-            require(isPreLaunch, "Burning only allowed in pre-launch");
             _executeBurn(op.value);
         } else if (op.opType == OperationType.PostLaunch) {
             _executePostLaunch();
@@ -148,16 +161,35 @@ contract Liberdus is ERC20, Pausable {
             _executeSetBridgeInCaller(op.target);
         } else if (op.opType == OperationType.SetBridgeInLimits) {
             _executeSetBridgeInLimits(op.value, abi.decode(op.data, (uint256)));
-        } else if (op.opType == OperationType.UpdateSigner) {
-            _executeUpdateSigner(op.target, address(uint160(op.value)));
+        } else {
+            revert("Unknown operation type");
         }
 
         emit OperationExecuted(operationId, op.opType);
     }
 
+    function isSigner(address account) public view returns (bool) {
+        for (uint i = 0; i < signers.length; i++) {
+            if (signers[i] == account) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     function getOperationHash(bytes32 operationId) public view returns (bytes32) {
         Operation storage op = operations[operationId];
         return keccak256(abi.encodePacked(operationId, op.opType, op.target, op.value, op.data));
+    }
+
+    // Override transfer function to check for pause
+    function transfer(address to, uint256 amount) public override whenNotPaused returns (bool) {
+        return super.transfer(to, amount);
+    }
+
+    // Override transferFrom function to check for pause
+    function transferFrom(address from, address to, uint256 amount) public override whenNotPaused returns (bool) {
+        return super.transferFrom(from, to, amount);
     }
 
     function _executeMint() internal {
