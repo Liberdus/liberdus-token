@@ -1,0 +1,36 @@
+{
+  "name": "hardhat-project",
+  "devDependencies": {
+    "@chainsafe/blst": "^2.0.3",
+    "@gnosis.pm/safe-core-sdk": "^3.2.0",
+    "@gnosis.pm/safe-service-client": "^1.4.0",
+    "@nomicfoundation/hardhat-chai-matchers": "^2.0.8",
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.12",
+    "@nomicfoundation/hardhat-toolbox": "^3.0.0",
+    "@nomicfoundation/hardhat-verify": "^1.1.1",
+    "@typechain/ethers-v6": "^0.4.3",
+    "@typechain/hardhat": "^8.0.3",
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.9",
+    "axios": "^1.7.7",
+    "hardhat": "^2.22.13",
+    "hardhat-gas-reporter": "^1.0.10",
+    "solidity-coverage": "^0.8.13",
+    "ts-node": "^10.9.2",
+    "typechain": "^8.3.2",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "@gnosis.pm/safe-ethers-lib": "^1.7.0",
+    "@openzeppelin/contracts": "^5.1.0",
+    "@safe-global/api-kit": "^2.5.2",
+    "@safe-global/protocol-kit": "^5.0.2",
+    "@safe-global/safe-core-sdk": "^3.3.5",
+    "@safe-global/safe-core-sdk-types": "^5.1.0",
+    "@safe-global/safe-ethers-lib": "^1.9.4",
+    "bls-signatures": "^2.0.3",
+    "chai": "^4.3.10",
+    "dotenv": "^16.4.5"
+  }
+}
