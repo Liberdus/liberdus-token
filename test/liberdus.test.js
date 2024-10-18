@@ -89,7 +89,12 @@ describe("LiberdusToken", function () {
     const bridgeOutAmount = ethers.parseUnits("500", 18);
     await liberdus.connect(recipient).bridgeOut(bridgeOutAmount, owner.address);
 
+    // Check recipient balance after bridge out (should be reduced)
     recipientBalance = await liberdus.balanceOf(recipient.address);
     expect(ethers.formatUnits(recipientBalance, 18)).to.equal("500.0");
+
+    // Check total supply (should be reduced after bridge out)
+    const totalSupplyAfterBridgeOut = await liberdus.totalSupply();
+    expect(ethers.formatUnits(totalSupplyAfterBridgeOut, 18)).to.equal("500.0");
   });
 });
