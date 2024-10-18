@@ -48,12 +48,14 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     address[3] public signers;
     uint256 public constant REQUIRED_SIGNATURES = 3;
     uint256 public constant REQUIRED_SIGNATURES_FOR_UPDATE = 2;
+    uint256 public immutable chainId;
+
 
     event OperationRequested(bytes32 indexed operationId, OperationType indexed opType);
     event SignatureSubmitted(bytes32 indexed operationId, address indexed signer);
     event OperationExecuted(bytes32 indexed operationId, OperationType indexed opType);
-    event BridgedOut(address indexed from, uint256 amount, address indexed targetAddress, bytes32 txId);
-    event BridgedIn(address indexed to, uint256 amount, bytes32 txId);
+    event BridgedOut(address indexed from, uint256 amount, address indexed targetAddress, uint256 chainId, bytes32 txId);
+    event BridgedIn(address indexed to, uint256 amount, uint256 chainId, bytes32 txId);
 
     event DebugLog(string message, bytes32 data);
     event DebugAddress(string message, address data);
@@ -68,8 +70,9 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         _;
     }
 
-    constructor(address[3] memory _signers) ERC20("Liberdus Token", "LIB") Ownable(msg.sender) {
+    constructor(address[3] memory _signers, uint256 _chainId) ERC20("Liberdus", "LBD") Ownable(msg.sender) {
         signers = _signers;
+        chainId = _chainId;
     }
 
     function requestOperation(
@@ -118,12 +121,13 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         address signer = ECDSA.recover(prefixedHash, signature);
         emit DebugAddress("Recovered signer", signer);
         
-        require(isSigner(signer), "Invalid signature");
-
         if (op.opType == OperationType.UpdateSigner) {
+            // we allow owner to sign for UpdateSigner operations in case 2 signers lost their keys
+            require(isSigner(signer) || signer == owner(), "Invalid signature for UpdateSigner");
             require(signer != op.target, "Signer being replaced cannot approve");
             require(op.numSignatures < REQUIRED_SIGNATURES_FOR_UPDATE, "Enough signatures already");
         } else {
+            require(isSigner(signer), "Invalid signature");
             require(op.numSignatures < REQUIRED_SIGNATURES, "Enough signatures already");
         }
 
@@ -179,7 +183,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
 
     function getOperationHash(bytes32 operationId) public view returns (bytes32) {
         Operation storage op = operations[operationId];
-        return keccak256(abi.encodePacked(operationId, op.opType, op.target, op.value, op.data));
+        return keccak256(abi.encodePacked(operationId, op.opType, op.target, op.value, op.data, chainId));
     }
 
     // Override transfer function to check for pause
@@ -232,20 +236,26 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         }
     }
 
-    function bridgeOut(uint256 amount, address targetAddress) public whenNotPaused {
+    function bridgeOut(uint256 amount, address targetAddress, uint256 _chainId) public whenNotPaused {
         require(!isPreLaunch, "Bridge out not available in pre-launch");
+        require(_chainId == chainId, "Invalid chain ID");
         _burn(msg.sender, amount);
-        emit BridgedOut(msg.sender, amount, targetAddress, blockhash(block.number - 1));
+        emit BridgedOut(msg.sender, amount, targetAddress, _chainId, blockhash(block.number - 1));
     }
 
-    function bridgeIn(address to, uint256 amount, bytes32 txId) public onlyBridgeInCaller whenNotPaused {
+    function bridgeIn(address to, uint256 amount, uint256 _chainId, bytes32 txId) public onlyBridgeInCaller whenNotPaused {
         require(!isPreLaunch, "Bridge in not available in pre-launch");
+        require(_chainId == chainId, "Invalid chain ID");
         require(amount <= maxBridgeInAmount, "Amount exceeds bridge-in limit");
         require(block.timestamp >= lastBridgeInTime + bridgeInCooldown, "Bridge-in cooldown not met");
 
         lastBridgeInTime = block.timestamp;
         _mint(to, amount);
-        emit BridgedIn(to, amount, txId);
+        emit BridgedIn(to, amount, _chainId, txId);
+    }
+
+    function getChainId() public view returns (uint256) {
+        return chainId;
     }
 
     function getNextMintTime() public view returns (uint256) {
