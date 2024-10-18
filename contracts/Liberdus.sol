@@ -266,6 +266,8 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         return MAX_SUPPLY - totalSupply();
     }
 
+    /// @dev Overrides the _update function to add pause functionality to all token movements.
+    /// This ensures that transfers, minting, and burning are all halted when the contract is paused.
     function _update(address from, address to, uint256 amount) internal override whenNotPaused {
         super._update(from, to, amount);
     }
