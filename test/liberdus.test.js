@@ -47,7 +47,7 @@ describe("LiberdusToken", function () {
 
   it("Should prevent signature replay from another signer", async function () {
     const operationType = 0; // Mint operation
-    const target = ZeroAddress;
+    const target = owner.address;
     const value = 0;
     const data = "0x";
 
@@ -75,7 +75,7 @@ describe("LiberdusToken", function () {
 
   it("Should validate correct signer is submitting their own signature", async function () {
     const operationType = 0; // Mint operation
-    const target = ZeroAddress;
+    const target = owner.address;
     const value = 0;
     const data = "0x";
 
@@ -111,13 +111,13 @@ describe("LiberdusToken", function () {
   });
 
   it("Should allow first mint and prevent immediate second mint", async function () {
-    await requestAndSignOperation(0, ZeroAddress, 0, "0x");
+    await requestAndSignOperation(0, owner.address, 0, "0x");
     
     const totalSupply = await liberdus.totalSupply();
     expect(ethers.formatUnits(totalSupply, 18)).to.equal("3000000.0");
 
     await expect(
-      requestAndSignOperation(0, ZeroAddress, 0, "0x")
+      requestAndSignOperation(0, owner.address, 0, "0x")
     ).to.be.revertedWith("Mint interval not reached");
 
     const totalSupplyAfterSecondMint = await liberdus.totalSupply();
@@ -190,7 +190,7 @@ describe("LiberdusToken", function () {
   
   it("Should include chain ID in operation hash", async function () {
     const operationType = 0; // Mint operation
-    const target = ZeroAddress;
+    const target = owner.address;
     const value = 0;
     const data = "0x";
 
@@ -213,5 +213,133 @@ describe("LiberdusToken", function () {
 
     // Verify that the operation hashes are different
     expect(operationHash).to.not.equal(operationHashDifferentChain);
+  });
+  it("Should execute burn operation correctly", async function () {
+    // First mint some tokens
+    await requestAndSignOperation(0, owner.address, 0, "0x");
+    const initialSupply = await liberdus.totalSupply();
+    
+    // Burn half of the minted amount
+    const burnAmount = initialSupply / BigInt(2);
+    await requestAndSignOperation(1, owner.address, burnAmount, "0x");
+    
+    const finalSupply = await liberdus.totalSupply();
+    expect(finalSupply).to.equal(initialSupply - burnAmount);
+  });
+
+  it("Should pause and unpause operations correctly", async function () {
+    // First mint some tokens to test transfer
+    await requestAndSignOperation(0, owner.address, 0, "0x");
+    const amount = ethers.parseUnits("1000", 18);
+
+    // Record owner's balance after mint (since mint goes to msg.sender)
+    const ownerBalance = await liberdus.balanceOf(owner.address);
+    expect(ownerBalance).to.be.gt(amount, "Owner should have sufficient balance");
+    
+    // Pause the contract
+    await requestAndSignOperation(3, ZeroAddress, 0, "0x");
+    
+    // Try to transfer while paused
+    await expect(
+      liberdus.transfer(recipient.address, amount)
+    ).to.be.revertedWithCustomError(liberdus, "EnforcedPause");
+
+    // Unpause the contract
+    await requestAndSignOperation(4, ZeroAddress, 0, "0x");
+    
+    // Transfer should work after unpause
+    await expect(
+      liberdus.transfer(recipient.address, amount)
+    ).to.be.fulfilled;
+
+    // Verify the transfer was successful
+    expect(await liberdus.balanceOf(recipient.address)).to.equal(amount);
+    expect(await liberdus.balanceOf(owner.address)).to.equal(ownerBalance - amount);
+  });
+
+  it("Should set bridge in limits correctly", async function () {
+    const newMaxAmount = ethers.parseUnits("20000", 18);  // 20,000 tokens
+    const newCooldown = BigInt(2 * 60);  // 2 minutes
+
+    // Encode the cooldown parameter
+    const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(
+      ['uint256'],
+      [newCooldown]
+    );
+
+    await requestAndSignOperation(6, ZeroAddress, newMaxAmount, encodedData);
+    
+    expect(await liberdus.maxBridgeInAmount()).to.equal(newMaxAmount);
+    expect(await liberdus.bridgeInCooldown()).to.equal(newCooldown);
+
+    // Test the new limits
+    await requestAndSignOperation(2, ZeroAddress, 0, "0x"); // Switch to post-launch
+    await requestAndSignOperation(5, bridgeInCaller.address, 0, "0x"); // Set bridge caller
+
+    // Try to bridge in more than the new limit
+    const tooMuchAmount = ethers.parseUnits("20001", 18);
+    await expect(
+      liberdus.connect(bridgeInCaller).bridgeIn(recipient.address, tooMuchAmount, chainId, ethers.id("testTxId"))
+    ).to.be.revertedWith("Amount exceeds bridge-in limit");
+
+    // Bridge in valid amount
+    const validAmount = ethers.parseUnits("19999", 18);
+    await liberdus.connect(bridgeInCaller).bridgeIn(recipient.address, validAmount, chainId, ethers.id("testTxId"));
+
+    // Try to bridge in again before cooldown
+    await expect(
+      liberdus.connect(bridgeInCaller).bridgeIn(recipient.address, validAmount, chainId, ethers.id("testTxId"))
+    ).to.be.revertedWith("Bridge-in cooldown not met");
+  });
+
+  it("Should update signer correctly", async function () {
+    const newSigner = recipient;  // Using recipient address as new signer
+    const oldSigner = signer2;    // Replacing signer2
+
+    // Request signer update operation
+    const tx = await liberdus.requestOperation(7, oldSigner.address, BigInt(newSigner.address), "0x");
+    const receipt = await tx.wait();
+    
+    const operationRequestedEvent = receipt.logs.find(log => log.fragment.name === 'OperationRequested');
+    const operationId = operationRequestedEvent.args.operationId;
+
+    // Only need 2 signatures for signer update
+    for (let i = 0; i < 2; i++) {
+      const messageHash = await liberdus.getOperationHash(operationId);
+      const signature = await signers[i].signMessage(ethers.getBytes(messageHash));
+      await liberdus.connect(signers[i]).submitSignature(operationId, signature);
+    }
+
+    // Verify new signer is set
+    expect(await liberdus.isSigner(newSigner.address)).to.be.true;
+    expect(await liberdus.isSigner(oldSigner.address)).to.be.false;
+
+    // Try to use old signer for an operation
+    const mintOp = await liberdus.requestOperation(0, owner.address, 0, "0x");
+    const mintReceipt = await mintOp.wait();
+    const mintOpId = mintReceipt.logs.find(log => log.fragment.name === 'OperationRequested').args.operationId;
+    
+    const oldSignerSignature = await oldSigner.signMessage(ethers.getBytes(await liberdus.getOperationHash(mintOpId)));
+    await expect(
+      liberdus.connect(oldSigner).submitSignature(mintOpId, oldSignerSignature)
+    ).to.be.revertedWith("Only signers can submit signatures");
+  });
+
+  it("Should prevent signer being replaced from approving their own replacement", async function () {
+    const newSigner = recipient;
+    const oldSigner = signer2;
+
+    const tx = await liberdus.requestOperation(7, oldSigner.address, BigInt(newSigner.address), "0x");
+    const receipt = await tx.wait();
+    
+    const operationId = receipt.logs.find(log => log.fragment.name === 'OperationRequested').args.operationId;
+
+    // Try to sign with the signer being replaced
+    const messageHash = await liberdus.getOperationHash(operationId);
+    const signature = await oldSigner.signMessage(ethers.getBytes(messageHash));
+    
+    await expect(
+      liberdus.connect(oldSigner).submitSignature(operationId, signature)
+    ).to.be.revertedWith("Signer being replaced cannot approve");
   });
 });
