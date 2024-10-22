@@ -120,6 +120,9 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         // Recover the signer
         address signer = ECDSA.recover(prefixedHash, signature);
         emit DebugAddress("Recovered signer", signer);
+
+        // Signer from signature must match message sender
+        require(signer == msg.sender, "Signature signer must be message sender");
         
         if (op.opType == OperationType.UpdateSigner) {
             // we allow owner to sign for UpdateSigner operations in case 2 signers lost their keys

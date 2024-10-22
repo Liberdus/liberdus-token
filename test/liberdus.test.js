@@ -45,6 +45,71 @@ describe("LiberdusToken", function () {
     expect(await liberdus.getChainId()).to.equal(chainId);
   });
 
+  it("Should prevent signature replay from another signer", async function () {
+    const operationType = 0; // Mint operation
+    const target = ZeroAddress;
+    const value = 0;
+    const data = "0x";
+
+    // Request operation
+    const tx = await liberdus.requestOperation(operationType, target, value, data);
+    const receipt = await tx.wait();
+    
+    const operationRequestedEvent = receipt.logs.find(log => log.fragment.name === 'OperationRequested');
+    const operationId = operationRequestedEvent.args.operationId;
+
+    // Get owner's signature
+    const messageHash = await liberdus.getOperationHash(operationId);
+    const ownerSignature = await owner.signMessage(ethers.getBytes(messageHash));
+
+    // Try to submit owner's signature through signer1 (another valid signer)
+    await expect(
+      liberdus.connect(signer1).submitSignature(operationId, ownerSignature)
+    ).to.be.revertedWith("Signature signer must be message sender");
+
+    // Verify operation hasn't been executed
+    const operation = await liberdus.operations(operationId);
+    expect(operation.executed).to.be.false;
+    expect(operation.numSignatures).to.equal(0);
+  });
+
+  it("Should validate correct signer is submitting their own signature", async function () {
+    const operationType = 0; // Mint operation
+    const target = ZeroAddress;
+    const value = 0;
+    const data = "0x";
+
+    // Request operation
+    const tx = await liberdus.requestOperation(operationType, target, value, data);
+    const receipt = await tx.wait();
+    
+    const operationRequestedEvent = receipt.logs.find(log => log.fragment.name === 'OperationRequested');
+    const operationId = operationRequestedEvent.args.operationId;
+
+    // Get signatures from all signers
+    const signatures = [];
+    for (let i = 0; i < signers.length; i++) {
+      const messageHash = await liberdus.getOperationHash(operationId);
+      signatures[i] = await signers[i].signMessage(ethers.getBytes(messageHash));
+    }
+
+    // Try to submit signer2's signature through signer1
+    // This should fail before the signer check because signer1 hasn't submitted their own signature yet
+    await expect(
+      liberdus.connect(signer1).submitSignature(operationId, signatures[2])
+    ).to.be.revertedWith("Signature signer must be message sender");
+
+    // Submit signatures in order
+    for (let i = 0; i < signers.length; i++) {
+      await liberdus.connect(signers[i]).submitSignature(operationId, signatures[i]);
+    }
+
+    // Verify operation executed successfully after all valid signatures
+    const operation = await liberdus.operations(operationId);
+    expect(operation.executed).to.be.true;
+    expect(operation.numSignatures).to.equal(signers.length);
+  });
+
   it("Should allow first mint and prevent immediate second mint", async function () {
     await requestAndSignOperation(0, ZeroAddress, 0, "0x");
     
