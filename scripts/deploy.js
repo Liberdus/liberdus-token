@@ -8,7 +8,7 @@ async function main() {
   console.log("Account balance:", (await deployer.provider.getBalance(deployer.address)).toString());
 
   const LiberdusToken = await hre.ethers.getContractFactory("Liberdus");
-  const liberdusToken = await LiberdusToken.deploy([deployer.address, signer1.address, signer2.address]);
+  const liberdusToken = await LiberdusToken.deploy([deployer.address, signer1.address, signer2.address], 1337);
 
   await liberdusToken.waitForDeployment();
 
@@ -25,7 +25,7 @@ async function main() {
     console.log("Verifying contract...");
     await hre.run("verify:verify", {
       address: await liberdusToken.getAddress(),
-      constructorArguments: [[deployer.address, signer1.address, signer2.address]],
+      constructorArguments: [[deployer.address, signer1.address, signer2.address], 1337],
     });
   }
 }
