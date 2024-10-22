@@ -50,7 +50,6 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     uint256 public constant REQUIRED_SIGNATURES_FOR_UPDATE = 2;
     uint256 public immutable chainId;
 
-
     // Defining events for the contract
     event OperationRequested(
         bytes32 indexed operationId,
@@ -93,18 +92,6 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     event LaunchStateChanged(
         bytes32 indexed operationId,
         bool isPreLaunch,
-        uint256 timestamp
-    );
-
-    event ContractPaused(
-        bytes32 indexed operationId,
-        address indexed executor,
-        uint256 timestamp
-    );
-
-    event ContractUnpaused(
-        bytes32 indexed operationId,
-        address indexed executor,
         uint256 timestamp
     );
 
@@ -256,30 +243,6 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         emit OperationExecuted(operationId, op.opType);
     }
 
-    function isSigner(address account) public view returns (bool) {
-        for (uint i = 0; i < signers.length; i++) {
-            if (signers[i] == account) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    function getOperationHash(bytes32 operationId) public view returns (bytes32) {
-        Operation storage op = operations[operationId];
-        return keccak256(abi.encodePacked(operationId, op.opType, op.target, op.value, op.data, chainId));
-    }
-
-    // Override transfer function to check for pause
-    function transfer(address to, uint256 amount) public override whenNotPaused returns (bool) {
-        return super.transfer(to, amount);
-    }
-
-    // Override transferFrom function to check for pause
-    function transferFrom(address from, address to, uint256 amount) public override whenNotPaused returns (bool) {
-        return super.transferFrom(from, to, amount);
-    }
-
     function _executeMint(bytes32 operationId) internal {
         Operation storage op = operations[operationId];  // Need to access the operation
         
@@ -379,6 +342,31 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         _mint(to, amount);
         lastBridgeInTime = block.timestamp;
         emit BridgedIn(to, amount, _chainId, txId, block.timestamp);
+    }
+
+        function isSigner(address account) public view returns (bool) {
+        for (uint i = 0; i < signers.length; i++) {
+            if (signers[i] == account) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // --------- HELPER FUNCTIONS ---------
+    function getOperationHash(bytes32 operationId) public view returns (bytes32) {
+        Operation storage op = operations[operationId];
+        return keccak256(abi.encodePacked(operationId, op.opType, op.target, op.value, op.data, chainId));
+    }
+
+    // Override transfer function to check for pause
+    function transfer(address to, uint256 amount) public override whenNotPaused returns (bool) {
+        return super.transfer(to, amount);
+    }
+
+    // Override transferFrom function to check for pause
+    function transferFrom(address from, address to, uint256 amount) public override whenNotPaused returns (bool) {
+        return super.transferFrom(from, to, amount);
     }
 
     function getChainId() public view returns (uint256) {
