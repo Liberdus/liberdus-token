@@ -51,14 +51,99 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     uint256 public immutable chainId;
 
 
-    event OperationRequested(bytes32 indexed operationId, OperationType indexed opType);
-    event SignatureSubmitted(bytes32 indexed operationId, address indexed signer);
-    event OperationExecuted(bytes32 indexed operationId, OperationType indexed opType);
-    event BridgedOut(address indexed from, uint256 amount, address indexed targetAddress, uint256 chainId, bytes32 txId);
-    event BridgedIn(address indexed to, uint256 amount, uint256 chainId, bytes32 txId);
+    // Defining events for the contract
+    event OperationRequested(
+        bytes32 indexed operationId,
+        OperationType indexed opType,
+        address indexed requester,
+        address target,
+        uint256 value,
+        bytes data,
+        uint256 timestamp
+    );
 
-    event DebugLog(string message, bytes32 data);
-    event DebugAddress(string message, address data);
+    event SignatureSubmitted(
+        bytes32 indexed operationId,
+        address indexed signer,
+        uint256 currentSignatures,
+        uint256 requiredSignatures,
+        uint256 timestamp
+    );
+
+    event OperationExecuted(
+        bytes32 indexed operationId,
+        OperationType indexed opType
+    );
+
+    event MintExecuted(
+        bytes32 indexed operationId,
+        address indexed target,
+        uint256 amount,
+        uint256 newTotalSupply,
+        uint256 nextMintTime
+    );
+
+    event BurnExecuted(
+        bytes32 indexed operationId,
+        address indexed target,
+        uint256 amount,
+        uint256 newTotalSupply
+    );
+
+    event LaunchStateChanged(
+        bytes32 indexed operationId,
+        bool isPreLaunch,
+        uint256 timestamp
+    );
+
+    event ContractPaused(
+        bytes32 indexed operationId,
+        address indexed executor,
+        uint256 timestamp
+    );
+
+    event ContractUnpaused(
+        bytes32 indexed operationId,
+        address indexed executor,
+        uint256 timestamp
+    );
+
+    event BridgeInCallerUpdated(
+        bytes32 indexed operationId,
+        address indexed newCaller,
+        uint256 timestamp
+    );
+
+    event BridgeInLimitsUpdated(
+        bytes32 indexed operationId,
+        uint256 newMaxAmount,
+        uint256 newCooldown,
+        uint256 timestamp
+    );
+
+    event BridgedOut(
+        address indexed from,
+        uint256 amount,
+        address indexed targetAddress,
+        uint256 indexed chainId,
+        bytes32 txId,
+        uint256 timestamp
+    );
+
+    event BridgedIn(
+        address indexed to,
+        uint256 amount,
+        uint256 indexed chainId,
+        bytes32 indexed txId,
+        uint256 timestamp
+    );
+
+    event SignerUpdated(
+        bytes32 indexed operationId,
+        address indexed oldSigner,
+        address indexed newSigner,
+        uint256 timestamp
+    );
 
     modifier onlySigner() {
         require(isSigner(msg.sender), "Not a signer");
@@ -100,7 +185,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         op.executed = false;
         op.numSignatures = 0;
 
-        emit OperationRequested(operationId, opType);
+        emit OperationRequested(operationId, opType, msg.sender, target, value, data, block.timestamp);
         return operationId;
     }
 
@@ -111,15 +196,12 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         require(!op.signatures[msg.sender], "Signature already submitted");
 
         bytes32 messageHash = getOperationHash(operationId);
-        emit DebugLog("Raw message hash", messageHash);
 
         // Add Ethereum Signed Message prefix
         bytes32 prefixedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
-        emit DebugLog("Prefixed hash", prefixedHash);
 
         // Recover the signer
         address signer = ECDSA.recover(prefixedHash, signature);
-        emit DebugAddress("Recovered signer", signer);
 
         // Signer from signature must match message sender
         require(signer == msg.sender, "Signature signer must be message sender");
@@ -137,7 +219,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         op.signatures[signer] = true;
         op.numSignatures++;
 
-        emit SignatureSubmitted(operationId, signer);
+        emit SignatureSubmitted(operationId, signer, op.numSignatures, REQUIRED_SIGNATURES, block.timestamp);
 
         if ((op.opType == OperationType.UpdateSigner && op.numSignatures == REQUIRED_SIGNATURES_FOR_UPDATE) ||
             (op.opType != OperationType.UpdateSigner && op.numSignatures == REQUIRED_SIGNATURES)) {
@@ -153,25 +235,24 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         op.executed = true;
 
         if (op.opType == OperationType.UpdateSigner) {
-            _executeUpdateSigner(op.target, address(uint160(op.value)));
+            _executeUpdateSigner(operationId, op.target, address(uint160(op.value)));
         } else if (op.opType == OperationType.Mint) {
-            _executeMint();
+            _executeMint(operationId);
         } else if (op.opType == OperationType.Burn) {
-            _executeBurn(op.value);
+            _executeBurn(operationId, op.value);
         } else if (op.opType == OperationType.PostLaunch) {
-            _executePostLaunch();
+            _executePostLaunch(operationId);
         } else if (op.opType == OperationType.Pause) {
             _pause();
         } else if (op.opType == OperationType.Unpause) {
             _unpause();
         } else if (op.opType == OperationType.SetBridgeInCaller) {
-            _executeSetBridgeInCaller(op.target);
+            _executeSetBridgeInCaller(operationId, op.target);
         } else if (op.opType == OperationType.SetBridgeInLimits) {
-            _executeSetBridgeInLimits(op.value, abi.decode(op.data, (uint256)));
+            _executeSetBridgeInLimits(operationId, op.value, abi.decode(op.data, (uint256)));
         } else {
             revert("Unknown operation type");
         }
-
         emit OperationExecuted(operationId, op.opType);
     }
 
@@ -199,35 +280,72 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         return super.transferFrom(from, to, amount);
     }
 
-    function _executeMint() internal {
+    function _executeMint(bytes32 operationId) internal {
+        Operation storage op = operations[operationId];  // Need to access the operation
+        
         if (lastMintTime != 0) {
             require(block.timestamp >= lastMintTime + MINT_INTERVAL, "Mint interval not reached");
         }
         require(totalSupply() + MINT_AMOUNT <= MAX_SUPPLY, "Max supply exceeded");
         
+        _mint(op.target, MINT_AMOUNT);  // Mint to the specified target address
         lastMintTime = block.timestamp;
-        _mint(msg.sender, MINT_AMOUNT);
+        
+        emit MintExecuted(
+            operationId,
+            op.target,
+            MINT_AMOUNT,
+            totalSupply(),
+            lastMintTime + MINT_INTERVAL
+        );
     }
 
-    function _executeBurn(uint256 amount) internal {
-        _burn(msg.sender, amount);
+    function _executeBurn(bytes32 operationId, uint256 amount) internal {
+        Operation storage op = operations[operationId];
+        
+        // Ensure the target has enough balance and has approved the burn
+        require(balanceOf(op.target) >= amount, "Insufficient balance to burn");
+        
+        _burn(op.target, amount);  // Burn from the specified target address
+        emit BurnExecuted(
+            operationId,
+            op.target,
+            amount,
+            totalSupply()
+        );
     }
 
-    function _executePostLaunch() internal {
+    function _executePostLaunch(bytes32 operationId) internal {
         require(isPreLaunch, "Already in post-launch mode");
         isPreLaunch = false;
+        emit LaunchStateChanged(
+            operationId,
+            isPreLaunch,
+            block.timestamp
+        );
     }
 
-    function _executeSetBridgeInCaller(address newCaller) internal {
+    function _executeSetBridgeInCaller(bytes32 operationId, address newCaller) internal {
         bridgeInCaller = newCaller;
+        emit BridgeInCallerUpdated(
+            operationId,
+            newCaller,
+            block.timestamp
+        );
     }
 
-    function _executeSetBridgeInLimits(uint256 newMaxAmount, uint256 newCooldown) internal {
+    function _executeSetBridgeInLimits(bytes32 operationId, uint256 newMaxAmount, uint256 newCooldown) internal {
         maxBridgeInAmount = newMaxAmount;
         bridgeInCooldown = newCooldown;
+        emit BridgeInLimitsUpdated(
+            operationId,
+            newMaxAmount,
+            newCooldown,
+            block.timestamp
+        );
     }
 
-    function _executeUpdateSigner(address oldSigner, address newSigner) internal {
+    function _executeUpdateSigner(bytes32 operationId, address oldSigner, address newSigner) internal {
         require(isSigner(oldSigner), "Old signer not found");
         require(!isSigner(newSigner), "New signer already exists");
         
@@ -237,13 +355,19 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
                 break;
             }
         }
+        emit SignerUpdated(
+            operationId,
+            oldSigner,
+            newSigner,
+            block.timestamp
+        );
     }
 
     function bridgeOut(uint256 amount, address targetAddress, uint256 _chainId) public whenNotPaused {
         require(!isPreLaunch, "Bridge out not available in pre-launch");
         require(_chainId == chainId, "Invalid chain ID");
         _burn(msg.sender, amount);
-        emit BridgedOut(msg.sender, amount, targetAddress, _chainId, blockhash(block.number - 1));
+        emit BridgedOut(msg.sender, amount, targetAddress, _chainId, blockhash(block.number - 1), block.timestamp);
     }
 
     function bridgeIn(address to, uint256 amount, uint256 _chainId, bytes32 txId) public onlyBridgeInCaller whenNotPaused {
@@ -252,9 +376,9 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         require(amount <= maxBridgeInAmount, "Amount exceeds bridge-in limit");
         require(block.timestamp >= lastBridgeInTime + bridgeInCooldown, "Bridge-in cooldown not met");
 
-        lastBridgeInTime = block.timestamp;
         _mint(to, amount);
-        emit BridgedIn(to, amount, _chainId, txId);
+        lastBridgeInTime = block.timestamp;
+        emit BridgedIn(to, amount, _chainId, txId, block.timestamp);
     }
 
     function getChainId() public view returns (uint256) {
