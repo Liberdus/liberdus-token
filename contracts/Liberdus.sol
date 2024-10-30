@@ -250,6 +250,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
             require(block.timestamp >= lastMintTime + MINT_INTERVAL, "Mint interval not reached");
         }
         require(totalSupply() + MINT_AMOUNT <= MAX_SUPPLY, "Max supply exceeded");
+        require(isPreLaunch, "Mint is not available in after-launch");
         
         _mint(op.target, MINT_AMOUNT);  // Mint to the specified target address
         lastMintTime = block.timestamp;
@@ -268,8 +269,9 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         
         // Ensure the target has enough balance and has approved the burn
         require(balanceOf(op.target) >= amount, "Insufficient balance to burn");
-        
-        _burn(op.target, amount);  // Burn from the specified target address
+        require(isPreLaunch, "Burn is not available in after-launch");
+
+    _burn(op.target, amount);  // Burn from the specified target address
         emit BurnExecuted(
             operationId,
             op.target,
