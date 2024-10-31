@@ -10,15 +10,16 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     using ECDSA for bytes32;
 
-    enum OperationType { 
-        Mint, 
-        Burn, 
-        PostLaunch, 
-        Pause, 
-        Unpause, 
-        SetBridgeInCaller, 
-        SetBridgeInLimits, 
-        UpdateSigner 
+    enum OperationType {
+        Mint,
+        Burn,
+        PostLaunch,
+        Pause,
+        Unpause,
+        SetBridgeInCaller,
+        SetBridgeInLimits,
+        UpdateSigner,
+        DistributeTokens
     }
 
     struct Operation {
@@ -45,9 +46,8 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     uint256 public bridgeInCooldown = 1 minutes;
     uint256 public lastBridgeInTime;
 
-    address[3] public signers;
+    address[4] public signers;
     uint256 public constant REQUIRED_SIGNATURES = 3;
-    uint256 public constant REQUIRED_SIGNATURES_FOR_UPDATE = 2;
     uint256 public immutable chainId;
 
     // Defining events for the contract
@@ -132,6 +132,13 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         uint256 timestamp
     );
 
+    event TokensDistributed(
+        bytes32 indexed operationId,
+        address indexed recipient,
+        uint256 amount,
+        uint256 timestamp
+    );
+
     modifier onlySigner() {
         require(isSigner(msg.sender), "Not a signer");
         _;
@@ -142,7 +149,15 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         _;
     }
 
-    constructor(address[3] memory _signers, uint256 _chainId) ERC20("Liberdus", "LBD") Ownable(msg.sender) {
+    constructor(address[4] memory _signers, uint256 _chainId) ERC20("Liberdus", "LBD") Ownable(msg.sender) {
+        // Verify that all signer addresses are valid and unique
+        for (uint i = 0; i < _signers.length; i++) {
+            require(_signers[i] != address(0), "Invalid signer address");
+            for (uint j = 0; j < i; j++) {
+                require(_signers[i] != _signers[j], "Duplicate signer address");
+            }
+        }
+
         signers = _signers;
         chainId = _chainId;
     }
@@ -154,7 +169,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         bytes memory data
     ) public returns (bytes32) {
         require(isSigner(msg.sender) || owner() == msg.sender, "Not authorized to request operation");
-        
+
         if (opType == OperationType.UpdateSigner) {
             address oldSigner = target;
             address newSigner = address(uint160(value));
@@ -183,33 +198,27 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         require(!op.signatures[msg.sender], "Signature already submitted");
 
         bytes32 messageHash = getOperationHash(operationId);
-
         // Add Ethereum Signed Message prefix
         bytes32 prefixedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
-
-        // Recover the signer
         address signer = ECDSA.recover(prefixedHash, signature);
 
-        // Signer from signature must match message sender
         require(signer == msg.sender, "Signature signer must be message sender");
-        
+
         if (op.opType == OperationType.UpdateSigner) {
-            // we allow owner to sign for UpdateSigner operations in case 2 signers lost their keys
             require(isSigner(signer) || signer == owner(), "Invalid signature for UpdateSigner");
             require(signer != op.target, "Signer being replaced cannot approve");
-            require(op.numSignatures < REQUIRED_SIGNATURES_FOR_UPDATE, "Enough signatures already");
         } else {
             require(isSigner(signer), "Invalid signature");
-            require(op.numSignatures < REQUIRED_SIGNATURES, "Enough signatures already");
         }
+
+        require(op.numSignatures < REQUIRED_SIGNATURES, "Enough signatures already");
 
         op.signatures[signer] = true;
         op.numSignatures++;
 
         emit SignatureSubmitted(operationId, signer, op.numSignatures, REQUIRED_SIGNATURES, block.timestamp);
 
-        if ((op.opType == OperationType.UpdateSigner && op.numSignatures == REQUIRED_SIGNATURES_FOR_UPDATE) ||
-            (op.opType != OperationType.UpdateSigner && op.numSignatures == REQUIRED_SIGNATURES)) {
+        if (op.numSignatures == REQUIRED_SIGNATURES) {
             executeOperation(operationId);
         }
     }
@@ -221,7 +230,9 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         // Mark as executed before making any external calls
         op.executed = true;
 
-        if (op.opType == OperationType.UpdateSigner) {
+        if (op.opType == OperationType.DistributeTokens) {
+            _executeDistribution(operationId);
+        } else if (op.opType == OperationType.UpdateSigner) {
             _executeUpdateSigner(operationId, op.target, address(uint160(op.value)));
         } else if (op.opType == OperationType.Mint) {
             _executeMint(operationId);
@@ -240,24 +251,38 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         } else {
             revert("Unknown operation type");
         }
+
         emit OperationExecuted(operationId, op.opType);
     }
 
+    function _executeDistribution(bytes32 operationId) internal {
+        Operation storage op = operations[operationId];
+        require(balanceOf(address(this)) >= op.value, "Insufficient contract balance");
+
+        _transfer(address(this), op.target, op.value);
+
+        emit TokensDistributed(
+            operationId,
+            op.target,
+            op.value,
+            block.timestamp
+        );
+    }
+
     function _executeMint(bytes32 operationId) internal {
-        Operation storage op = operations[operationId];  // Need to access the operation
-        
         if (lastMintTime != 0) {
             require(block.timestamp >= lastMintTime + MINT_INTERVAL, "Mint interval not reached");
         }
         require(totalSupply() + MINT_AMOUNT <= MAX_SUPPLY, "Max supply exceeded");
         require(isPreLaunch, "Mint is not available in after-launch");
-        
-        _mint(op.target, MINT_AMOUNT);  // Mint to the specified target address
+
+        // Mint to contract address instead of target
+        _mint(address(this), MINT_AMOUNT);
         lastMintTime = block.timestamp;
-        
+
         emit MintExecuted(
             operationId,
-            op.target,
+            address(this),  // Changed this too to reflect actual recipient
             MINT_AMOUNT,
             totalSupply(),
             lastMintTime + MINT_INTERVAL
@@ -265,16 +290,14 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     }
 
     function _executeBurn(bytes32 operationId, uint256 amount) internal {
-        Operation storage op = operations[operationId];
-        
-        // Ensure the target has enough balance and has approved the burn
-        require(balanceOf(op.target) >= amount, "Insufficient balance to burn");
+        require(balanceOf(address(this)) >= amount, "Insufficient contract balance to burn");
         require(isPreLaunch, "Burn is not available in after-launch");
 
-    _burn(op.target, amount);  // Burn from the specified target address
+        _burn(address(this), amount);  // Burn from contract's balance
+
         emit BurnExecuted(
             operationId,
-            op.target,
+            address(this),
             amount,
             totalSupply()
         );
@@ -346,7 +369,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         emit BridgedIn(to, amount, _chainId, txId, block.timestamp);
     }
 
-        function isSigner(address account) public view returns (bool) {
+    function isSigner(address account) public view returns (bool) {
         for (uint i = 0; i < signers.length; i++) {
             if (signers[i] == account) {
                 return true;

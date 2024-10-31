@@ -2,6 +2,12 @@ require("@nomicfoundation/hardhat-ethers");
 require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 
+// Define signer addresses for production networks
+const SIGNER_1 = process.env.SIGNER_1 || "0x1111111111111111111111111111111111111111";
+const SIGNER_2 = process.env.SIGNER_2 || "0x2222222222222222222222222222222222222222";
+const SIGNER_3 = process.env.SIGNER_3 || "0x3333333333333333333333333333333333333333";
+const SIGNER_4 = process.env.SIGNER_4 || "0x4444444444444444444444444444444444444444";
+
 module.exports = {
   solidity: "0.8.20",
   defaultNetwork: "localhost",
@@ -26,15 +32,37 @@ module.exports = {
 
       ].filter((key) => key !== undefined),
     },
-    mumbai: {
-      url: process.env.MUMBAI_RPC_URL || "https://rpc-mumbai.maticvigil.com",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      chainId: 80001,
+    polygon: {
+      url: process.env.POLYGON_URL || "https://polygon-rpc.com",
+      accounts: [process.env.PRIVATE_KEY].filter(Boolean),
+      chainId: 137
     },
+    mumbai: {
+      url: process.env.MUMBAI_URL || "https://rpc-mumbai.maticvigil.com",
+      accounts: [process.env.PRIVATE_KEY].filter(Boolean),
+      chainId: 80001
+    },
+    amoy: {
+      url: process.env.MUMBAI_URL || "https://rpc-amoy.polygon.technology/",
+      accounts: [process.env.PRIVATE_KEY].filter(Boolean),
+      chainId: 80002
+    }
   },
   etherscan: {
     apiKey: {
+      polygon: process.env.POLYGONSCAN_API_KEY,
       polygonMumbai: process.env.POLYGONSCAN_API_KEY
     }
   },
+  namedAccounts: {
+    deployer: {
+      default: 0
+    },
+    signers: {
+      mainnet: [SIGNER_1, SIGNER_2, SIGNER_3, SIGNER_4],
+      polygon: [SIGNER_1, SIGNER_2, SIGNER_3, SIGNER_4],
+      mumbai: [SIGNER_1, SIGNER_2, SIGNER_3, SIGNER_4],
+      amoy: [SIGNER_1, SIGNER_2, SIGNER_3, SIGNER_4],
+    }
+  }
 };
