@@ -116,7 +116,6 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         uint256 amount,
         address indexed targetAddress,
         uint256 indexed chainId,
-        bytes32 txId,
         uint256 timestamp
     );
 
@@ -378,7 +377,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         require(amount > 0, "Cannot bridge out zero tokens");
         require(amount <= balanceOf(msg.sender), "Insufficient balance");
         _burn(msg.sender, amount);
-        emit BridgedOut(msg.sender, amount, targetAddress, _chainId, blockhash(block.number - 1), block.timestamp);
+        emit BridgedOut(msg.sender, amount, targetAddress, _chainId, block.timestamp);
     }
 
     function bridgeIn(address to, uint256 amount, uint256 _chainId, bytes32 txId) public onlyBridgeInCaller whenNotPaused {
