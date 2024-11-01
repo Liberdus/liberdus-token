@@ -290,6 +290,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     }
 
     function _executeBurn(bytes32 operationId, uint256 amount) internal {
+        require(amount > 0, "Cannot burn zero tokens");
         require(balanceOf(address(this)) >= amount, "Insufficient contract balance to burn");
         require(isPreLaunch, "Burn is not available in after-launch");
 
