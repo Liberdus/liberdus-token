@@ -257,6 +257,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
 
     function _executeDistribution(bytes32 operationId) internal {
         Operation storage op = operations[operationId];
+        require(op.value > 0, "Cannot distribute zero tokens");
         require(balanceOf(address(this)) >= op.value, "Insufficient contract balance");
 
         _transfer(address(this), op.target, op.value);
@@ -315,6 +316,8 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     }
 
     function _executeSetBridgeInCaller(bytes32 operationId, address newCaller) internal {
+        require(newCaller != address(0), "Invalid bridge-in caller");
+        require(newCaller != bridgeInCaller, "Bridge-in caller already set");
         bridgeInCaller = newCaller;
         emit BridgeInCallerUpdated(
             operationId,
@@ -324,6 +327,8 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     }
 
     function _executeSetBridgeInLimits(bytes32 operationId, uint256 newMaxAmount, uint256 newCooldown) internal {
+        require(newMaxAmount > 0, "Max amount must be greater than zero");
+        require(newCooldown > 0, "Cooldown must be greater than zero");
         maxBridgeInAmount = newMaxAmount;
         bridgeInCooldown = newCooldown;
         emit BridgeInLimitsUpdated(
@@ -355,6 +360,8 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     function bridgeOut(uint256 amount, address targetAddress, uint256 _chainId) public whenNotPaused {
         require(!isPreLaunch, "Bridge out not available in pre-launch");
         require(_chainId == chainId, "Invalid chain ID");
+        require(amount > 0, "Cannot bridge out zero tokens");
+        require(amount <= balanceOf(msg.sender), "Insufficient balance");
         _burn(msg.sender, amount);
         emit BridgedOut(msg.sender, amount, targetAddress, _chainId, blockhash(block.number - 1), block.timestamp);
     }
@@ -362,6 +369,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     function bridgeIn(address to, uint256 amount, uint256 _chainId, bytes32 txId) public onlyBridgeInCaller whenNotPaused {
         require(!isPreLaunch, "Bridge in not available in pre-launch");
         require(_chainId == chainId, "Invalid chain ID");
+        require(amount > 0, "Cannot bridge in zero tokens");
         require(amount <= maxBridgeInAmount, "Amount exceeds bridge-in limit");
         require(block.timestamp >= lastBridgeInTime + bridgeInCooldown, "Bridge-in cooldown not met");
 
