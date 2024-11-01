@@ -29,6 +29,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         bytes data;
         uint256 numSignatures;
         bool executed;
+        uint256 deadline;
         mapping(address => bool) signatures;
     }
 
@@ -40,6 +41,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
     uint256 public constant MINT_INTERVAL = 3 weeks + 6 days + 9 hours; // 3.9 weeks
     uint256 public constant MAX_SUPPLY = 210_000_000 * 10**18;
     uint256 public constant MINT_AMOUNT = 3_000_000 * 10**18;
+    uint256 public constant OPERATION_DEADLINE = 3 days;
 
     address public bridgeInCaller;
     uint256 public maxBridgeInAmount = 10_000 * 10**18;
@@ -58,6 +60,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         address target,
         uint256 value,
         bytes data,
+        uint256 deadline,
         uint256 timestamp
     );
 
@@ -178,6 +181,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
             require(oldSigner != msg.sender, "Cannot request to replace self");
         }
 
+        uint256 deadline = block.timestamp + OPERATION_DEADLINE;
         bytes32 operationId = keccak256(abi.encodePacked(operationCount++, opType, target, value, data, chainId));
         Operation storage op = operations[operationId];
         op.opType = opType;
@@ -186,8 +190,18 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         op.data = data;
         op.executed = false;
         op.numSignatures = 0;
+        op.deadline = deadline;
 
-        emit OperationRequested(operationId, opType, msg.sender, target, value, data, block.timestamp);
+        emit OperationRequested(
+            operationId,
+            opType,
+            msg.sender,
+            target,
+            value,
+            data,
+            deadline,
+            block.timestamp
+        );
         return operationId;
     }
 
@@ -196,6 +210,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         Operation storage op = operations[operationId];
         require(!op.executed, "Operation already executed");
         require(!op.signatures[msg.sender], "Signature already submitted");
+        require(block.timestamp <= op.deadline, "Operation deadline passed");
 
         bytes32 messageHash = getOperationHash(operationId);
         // Add Ethereum Signed Message prefix
@@ -413,6 +428,10 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
 
     function getRemainingSupply() public view returns (uint256) {
         return MAX_SUPPLY - totalSupply();
+    }
+
+    function isOperationExpired(bytes32 operationId) public view returns (bool) {
+        return block.timestamp > operations[operationId].deadline;
     }
 
     /// @dev Overrides the _update function to add pause functionality to all token movements.

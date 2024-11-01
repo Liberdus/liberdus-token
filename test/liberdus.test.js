@@ -268,6 +268,59 @@ describe("LiberdusToken", function () {
     expect(operationHash).to.not.equal(operationHashDifferentChain);
   });
 
+  it("Should set deadline to 3 days from request time", async function() {
+    const tx = await liberdus.requestOperation(0, owner.address, 0, "0x");
+    const receipt = await tx.wait();
+
+    const event = receipt.logs.find(log => log.fragment.name === 'OperationRequested');
+    const requestTime = event.args.timestamp;
+    const deadline = event.args.deadline;
+
+    // Convert values to BigInt and do the calculation
+    const threeDays = BigInt(3 * 24 * 60 * 60); // 3 days in seconds as BigInt
+    expect(deadline).to.equal(requestTime + threeDays);
+  });
+
+  it("Should reject signatures after 3 days", async function() {
+    const tx = await liberdus.requestOperation(0, owner.address, 0, "0x");
+    const receipt = await tx.wait();
+
+    const operationId = receipt.logs.find(
+      log => log.fragment.name === 'OperationRequested'
+    ).args.operationId;
+
+    // Increase time beyond 3 days
+    await network.provider.send("evm_increaseTime", [3 * 24 * 60 * 60 + 1]);
+    await network.provider.send("evm_mine");
+
+    const messageHash = await liberdus.getOperationHash(operationId);
+    const signature = await signers[0].signMessage(ethers.getBytes(messageHash));
+
+    await expect(
+      liberdus.connect(signers[0]).submitSignature(operationId, signature)
+    ).to.be.revertedWith("Operation deadline passed");
+  });
+
+  it("Should allow signatures within 3 days", async function() {
+    const tx = await liberdus.requestOperation(0, owner.address, 0, "0x");
+    const receipt = await tx.wait();
+
+    const operationId = receipt.logs.find(
+      log => log.fragment.name === 'OperationRequested'
+    ).args.operationId;
+
+    // Increase time to just before deadline
+    await network.provider.send("evm_increaseTime", [3 * 24 * 60 * 60 - 60]); // 1 minute before deadline
+    await network.provider.send("evm_mine");
+
+    const messageHash = await liberdus.getOperationHash(operationId);
+    const signature = await signers[0].signMessage(ethers.getBytes(messageHash));
+
+    await expect(
+      liberdus.connect(signers[0]).submitSignature(operationId, signature)
+    ).to.not.be.reverted;
+  });
+
   // Modified test to check burn from contract balance
   it("Should execute burn operation correctly", async function () {
     // First mint tokens to contract
