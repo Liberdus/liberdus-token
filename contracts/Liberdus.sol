@@ -178,7 +178,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
             require(oldSigner != msg.sender, "Cannot request to replace self");
         }
 
-        bytes32 operationId = keccak256(abi.encodePacked(operationCount++, opType, target, value, data));
+        bytes32 operationId = keccak256(abi.encodePacked(operationCount++, opType, target, value, data, chainId));
         Operation storage op = operations[operationId];
         op.opType = opType;
         op.target = target;
