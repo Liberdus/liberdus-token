@@ -151,7 +151,7 @@ contract Liberdus is ERC20, Pausable, ReentrancyGuard, Ownable {
         _;
     }
 
-    constructor(address[4] memory _signers, uint256 _chainId) ERC20("Liberdus", "LBD") Ownable(msg.sender) {
+    constructor(address[4] memory _signers, uint256 _chainId) ERC20("Liberdus", "LIB") Ownable(msg.sender) {
         // Verify that all signer addresses are valid and unique
         for (uint i = 0; i < _signers.length; i++) {
             require(_signers[i] != address(0), "Invalid signer address");
